@@ -8,14 +8,15 @@ organizationName := "com.bizo"
 
 name := "spark-plug"
 
-version := "1.2.5"
+version := "1.2.6"
 
-scalaVersion := "2.10.3"
+scalaVersion := "2.11.8"
 
 scalacOptions ++= Seq("-unchecked", "-deprecation", "-language:_")
 
 libraryDependencies ++= Seq(
-  "com.amazonaws" % "aws-java-sdk" % "1.10.16",
+  "com.amazonaws" % "aws-java-sdk-emr" % "1.11.126",
+  "com.amazonaws" % "aws-java-sdk-s3" % "1.11.126",
   "com.googlecode.json-simple" % "json-simple" % "1.1.1",
   "commons-lang" % "commons-lang" % "2.6",
   "junit" % "junit" % "4.10" % "test",

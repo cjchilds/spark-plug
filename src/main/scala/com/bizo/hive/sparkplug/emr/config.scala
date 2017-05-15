@@ -14,6 +14,7 @@ trait ClusterConfig {
   def jobFlowRole: Option[String] = None
   def serviceRole: Option[String] = None
   def subnetId: Option[String] = None
+  def subnetIds: Option[Seq[String]] = None
   def applications: Option[Seq[Application]] = None
 }
 

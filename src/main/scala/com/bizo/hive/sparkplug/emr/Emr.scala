@@ -2,17 +2,18 @@ package com.bizo.hive.sparkplug.emr
 
 import com.amazonaws.services.elasticmapreduce.model._
 import scala.collection.JavaConverters._
-import com.amazonaws.services.elasticmapreduce.AmazonElasticMapReduceClient
-import com.amazonaws.auth.AWSCredentials
+import scala.language.postfixOps
+
+import com.amazonaws.services.elasticmapreduce.{AmazonElasticMapReduce, AmazonElasticMapReduceClientBuilder}
+import com.amazonaws.auth.{AWSCredentials, AWSStaticCredentialsProvider}
 import com.bizo.hive.sparkplug.auth._
-import org.apache.commons.lang.StringUtils.substringAfterLast
-import com.amazonaws.services.elasticmapreduce.AmazonElasticMapReduce
 
 class Emr private(credentials: Option[AWSCredentials]) {
 
   lazy val emr: AmazonElasticMapReduce = credentials match {
-    case Some(knownCredentials) => new AmazonElasticMapReduceClient(knownCredentials)
-    case None => new AmazonElasticMapReduceClient()
+    case Some(knownCredentials) => AmazonElasticMapReduceClientBuilder.standard()
+      .withCredentials(new AWSStaticCredentialsProvider(knownCredentials)).build()
+    case None => AmazonElasticMapReduceClientBuilder.defaultClient()
   }
 
   def this() = this(None)
@@ -21,7 +22,7 @@ class Emr private(credentials: Option[AWSCredentials]) {
 
   def run(flow: JobFlow, configureRequest: RunJobFlowRequest => RunJobFlowRequest = identity)
     (implicit config: ClusterConfig): String = {
-    val request = new RunJobFlowRequest(flow.name, toJobFlowInstancesConfig(config, flow.cluster.instances.toSeq, flow.keepAlive, flow.terminationProtection))
+    val request = new RunJobFlowRequest(flow.name, toJobFlowInstancesConfig(config, flow.cluster, flow.keepAlive, flow.terminationProtection))
 
     request.setAmiVersion(config.amiVersion.orNull)
     request.setReleaseLabel(config.releaseLabel.orNull)
@@ -51,7 +52,7 @@ class Emr private(credentials: Option[AWSCredentials]) {
     emr.runJobFlow(configureRequest(request)).getJobFlowId
   }
 
-  private def toJobFlowInstancesConfig(config: ClusterConfig, instances: Seq[InstanceGroup], keepAlive: Boolean, terminationProtection: Boolean): JobFlowInstancesConfig = {
+  private def toJobFlowInstancesConfig(config: ClusterConfig, cluster: RunnableCluster, keepAlive: Boolean, terminationProtection: Boolean): JobFlowInstancesConfig = {
     val flow = new JobFlowInstancesConfig
 
     flow.setEc2KeyName(config.sshKeyPair.orNull)
@@ -64,10 +65,16 @@ class Emr private(credentials: Option[AWSCredentials]) {
     }
 
     flow.setEc2SubnetId(config.subnetId.orNull)
+    config.subnetIds.foreach { ids => flow.setEc2SubnetIds(ids.asJava) }
 
-    val groups = instances.map(toInstanceGroupConfig(config, _))
-
-    flow.withInstanceGroups(groups asJava)
+    cluster match {
+      case traditional: RunnableGroups =>
+        val groups = traditional.instances.map(toInstanceGroupConfig(config, _))
+        flow.withInstanceGroups(groups asJava)
+      case fleet: RunnableFleets =>
+        val fleets = fleet.fleets.map(toInstanceFleetConfig(config, _))
+        flow.withInstanceFleets(fleets asJava)
+    }
   }
 
   private def toStepConfig(steps: Seq[JobStep]): Seq[StepConfig] = {
@@ -109,6 +116,65 @@ class Emr private(credentials: Option[AWSCredentials]) {
     }
 
     group
+  }
+
+  private def toInstanceFleetConfig(config: ClusterConfig, instanceFleet: InstanceFleet) = {
+    val fleet = new InstanceFleetConfig
+    fleet.setName(instanceFleet.name)
+    fleet.setTargetOnDemandCapacity(instanceFleet.onDemandCapacity)
+    fleet.setTargetSpotCapacity(instanceFleet.spotCapacity)
+    val fleetType = instanceFleet match {
+      case _: MasterFleet =>
+        InstanceFleetType.MASTER
+      case _: TaskFleet =>
+        InstanceFleetType.TASK
+      case _: CoreFleet =>
+        InstanceFleetType.CORE
+    }
+    fleet.setInstanceFleetType(fleetType)
+    instanceFleet.spotSpecification match {
+      case Some(spotSpec) =>
+        val emrSpotProvisionSpec = new SpotProvisioningSpecification()
+        emrSpotProvisionSpec.setBlockDurationMinutes(spotSpec.spotDurationMinutes)
+        emrSpotProvisionSpec.setTimeoutAction(spotSpec.timeoutAction)
+        emrSpotProvisionSpec.setTimeoutDurationMinutes(spotSpec.timeoutMinutes)
+        fleet.setLaunchSpecifications(new InstanceFleetProvisioningSpecifications()
+          .withSpotSpecification(emrSpotProvisionSpec))
+      case _ =>
+    }
+
+    val instanceTypeConfigs = instanceFleet.instances.map { fi =>
+      val instanceType = new InstanceTypeConfig()
+        .withInstanceType(fi.instanceType)
+      if (fi.ebsVolumes.nonEmpty) {
+        val ebsConfig = new EbsConfiguration
+        ebsConfig.setEbsBlockDeviceConfigs(fi.ebsVolumes.map { volume =>
+          val bdConfig = new EbsBlockDeviceConfig
+          val volSpec = new VolumeSpecification()
+            .withVolumeType(volume.volType)
+            .withSizeInGB(volume.gbSize)
+          volume.iops.foreach(volSpec.setIops(_))
+          bdConfig.setVolumesPerInstance(volume.volumes)
+          bdConfig.setVolumeSpecification(volSpec)
+          bdConfig
+        } asJava)
+        instanceType.setEbsConfiguration(ebsConfig)
+      }
+
+      instanceType.setWeightedCapacity(instanceFleet.instanceWeighting(fi.instanceType))
+      fi.spotPricingStrategy.foreach { strategy =>
+        strategy.bidPrice.foreach(instanceType.setBidPrice)
+        strategy.bidVsOnDemandPercent.foreach { percent =>
+          instanceType.setBidPriceAsPercentageOfOnDemandPrice(percent.toDouble)
+        }
+      }
+
+      instanceType
+    }
+
+    fleet.setInstanceTypeConfigs(instanceTypeConfigs asJava)
+
+    fleet
   }
 }
 
