@@ -1,9 +1,7 @@
 package com.bizo.hive.sparkplug.s3
 
-import com.amazonaws.services.s3.AmazonS3Client
-import com.bizo.hive.sparkplug.auth._
+import com.amazonaws.services.s3.{AmazonS3, AmazonS3ClientBuilder}
 import java.io.File
-import com.amazonaws.services.s3.AmazonS3
 
 class S3(s3: AmazonS3) {
   import S3._
@@ -16,7 +14,7 @@ class S3(s3: AmazonS3) {
 }
 
 object S3 {
-  lazy val defaultS3 = new S3(new AmazonS3Client(new SystemPropertyOrEnvCredentials)) 
+  lazy val defaultS3 = new S3(AmazonS3ClientBuilder.defaultClient())
   
   def s3cp(file: File, s3Path: String) {
     defaultS3.cp(file, s3Path)

@@ -5,6 +5,8 @@ import org.junit.Assert._
 import com.amazonaws.auth.BasicAWSCredentials
 import scala.collection.JavaConversions._
 
+import com.amazonaws.services.elasticmapreduce.model.InstanceFleetType
+
 class EmrTest {
   val aws = new TestAmazonElasticMapReduceClient
   val emr = new Emr(null) {
@@ -58,5 +60,33 @@ class EmrTest {
     val actual = aws.jobFlowRequest.getApplications.map(a => a.getName).toSeq
 
     assertEquals(expected, actual)
+  }
+
+  @Test
+  def testInstanceFleets(): Unit = {
+    val testCoreInstanceType = "r4.4xlarge"
+    val spotSpec = Some(SpotSpecification(120))
+    val flow = JobFlow("test",
+      MasterFleet("m4.xlarge", 0, 1, spotSpec) + CoreFleet(testCoreInstanceType, 0, 2, spotSpec),
+      Seq())
+
+    emr.run(flow)
+
+    val fleets = aws.jobFlowRequest.getInstances.getInstanceFleets
+
+    assertEquals(2, fleets.size())
+    val masterFleet = fleets.find(_.getInstanceFleetType == InstanceFleetType.MASTER.name).get
+    val coreFleet = fleets.find(_.getInstanceFleetType == InstanceFleetType.CORE.name).get
+    val taskFleet = fleets.find(_.getInstanceFleetType == InstanceFleetType.TASK.name)
+    assertEquals(1, masterFleet.getInstanceTypeConfigs.size())
+    assertEquals(1, coreFleet.getInstanceTypeConfigs.size())
+    assertEquals(120, coreFleet.getLaunchSpecifications.getSpotSpecification.getBlockDurationMinutes)
+    assertTrue(taskFleet.isEmpty)
+    // using the flat weighter for single instances
+    val coreFleetInstance = coreFleet.getInstanceTypeConfigs.get(0)
+    assertEquals(1, coreFleetInstance.getWeightedCapacity)
+    assertEquals(EbsVolumeDefaults.getDefault(testCoreInstanceType).map(_.gbSize).get,
+      coreFleetInstance.getEbsConfiguration.getEbsBlockDeviceConfigs.get(0).getVolumeSpecification.getSizeInGB)
+    assertEquals(100d, coreFleetInstance.getBidPriceAsPercentageOfOnDemandPrice)
   }
 }
